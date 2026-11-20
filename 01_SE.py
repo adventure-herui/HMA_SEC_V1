@@ -20,7 +20,7 @@ from scipy.spatial import cKDTree
 from tqdm import tqdm
 from joblib import parallel_backend
 
-# ================== 并行 & 内存设置 =================
+# Parallel and memory settings
 os.environ["OMP_NUM_THREADS"] = "1" 
 os.environ["MKL_NUM_THREADS"] = "1" 
 os.environ["OPENBLAS_NUM_THREADS"] = "1" 
@@ -48,7 +48,7 @@ def clear_memory():
         pass
 
 
-# ================== 全局 geoid 缓存 ==================
+# Global geoid cache
 _GEOID_CACHE = None
 
 
@@ -133,7 +133,7 @@ def count_neighbors_slope_vectorized(local_coords: np.ndarray, slope_angles: np.
         counts[i] = np.sum((np.abs(delta_along) <= L / 2) & (np.abs(delta_perp) <= W / 2)) - 1
     return counts
 
-############ 函数测试区 #################
+# Function test section
 
 
 #####################################
@@ -164,7 +164,7 @@ def final_filter_slope_union(local_coords, slope_angles, regions, L=20.0):
         delta_perp = -delta_lat * sin_a + delta_elev * cos_a
 
         in_win = (delta_along >= -L / 2.0) & (delta_along <= L / 2.0)
-        if np.sum(in_win) < 1:  # 已经验证：设置太大，如果地面点不够多的话，会导致点数骤降
+        if np.sum(in_win) < 1:  # A larger minimum count can sharply reduce retained ground photons
             continue
 
         delta_perp_in_window = delta_perp[in_win]
@@ -337,7 +337,7 @@ def _process_single_block_internal(
     lat, lon, h, signal_conf,
     beam, ATL03_path, geoid_interpolator
 ):
-    # 注意：这里保持你 Stage1–6 的完整逻辑，不做删改
+    # Keep the complete Stage 1-6 processing logic unchanged
     from pygam import LinearGAM, s
 
     out_rows = []
@@ -394,7 +394,7 @@ def _process_single_block_internal(
 
     bottom25 = s3[mask]
 
-    # ================= Stage 6 : block 内部 GAM =================
+    # Stage 6: block-level GAM
     lat_b = bottom25[:, 1]
     lon_b = bottom25[:, 0]
     elev_b = bottom25[:, 2]
@@ -433,7 +433,7 @@ def _process_single_block_internal(
 
 
 def process_single_beam(beam: str, beam_data: dict, ATL03_path: str) -> pd.DataFrame:
-    # 保留你的算法逻辑：只改 block loop -> threading 并行
+    # Preserve the processing logic and parallelize only the block loop with threads
 
     try:
         lat = beam_data["lat"]
@@ -466,14 +466,14 @@ def process_single_beam(beam: str, beam_data: dict, ATL03_path: str) -> pd.DataF
         geoid_interpolator = get_geoid_interpolator()
 
         # =====================================================
-        # block loop (Stage1–6) -> 结构性并行：threading
+        # Parallel block loop for Stage 1-6 using threads
         # =====================================================
         block_pairs = list(zip(lat_blocks[:-1], lat_blocks[1:]))
 
         out_rows = []
 
-        # threading 不会创建新进程，不会叠加 loky 灾难
-        # 注意：这里 n_jobs=BLOCK_THREAD_WORKERS
+        # Threading avoids creating nested worker processes
+        # Use BLOCK_THREAD_WORKERS threads
         with parallel_backend("threading", n_jobs=BLOCK_THREAD_WORKERS):
             block_results = Parallel(batch_size=1)(
                 delayed(_process_single_block_internal)(
@@ -512,186 +512,6 @@ def process_single_beam(beam: str, beam_data: dict, ATL03_path: str) -> pd.DataF
 
 ####################################################
 ####################################################
-'''
-def process_single_beam(beam: str, beam_data: dict, ATL03_path: str) -> pd.DataFrame:
-    from pygam import LinearGAM, s
-
-    quiet_print(f"Processing Beam: {beam}")
-    beam_start = time.time()
-
-    try:
-        lat = beam_data["lat"]
-        lon = beam_data["lon"]
-        h = beam_data["h"]
-        signal_conf = beam_data.get("signal_conf", None)
-
-        if len(lat) < 20:
-            return pd.DataFrame()
-
-        # =====================================================
-        # sort by latitude
-        # =====================================================
-        sort_idx = np.argsort(lat)
-        lat = lat[sort_idx]
-        lon = lon[sort_idx]
-        h = h[sort_idx]
-        if signal_conf is not None:
-            signal_conf = signal_conf[sort_idx]
-
-        # =====================================================
-        # block strategy + single-block fallback 
-        # =====================================================
-        lat_span = lat.max() - lat.min()
-
-        if lat_span < 0.05:
-            lat_blocks = np.array([lat.min(), lat.max()])
-            quiet_print(
-                f"[{beam}]  short track (Δlat={lat_span:.4f}), "
-                f"use SINGLE-BLOCK mode"
-            )
-        else:
-            lat_blocks = np.arange(
-                np.floor(lat.min() * 100) / 100,
-                np.ceil(lat.max() * 100) / 100 + 0.01, 0.01)
-
-        geoid_interpolator = get_geoid_interpolator()
-
-        out_rows = []
-
-        # =====================================================
-        # block loop (Stage1–6)
-        # =====================================================
-        for block_start, block_end in zip(lat_blocks[:-1], lat_blocks[1:]):
-
-            in_block = (lat >= block_start - 0.001) & (lat < block_end + 0.001)
-            if np.sum(in_block) < 10:
-                continue
-
-            # ---------- SNR ----------
-            snr = np.nan
-            if signal_conf is not None:
-                bc = signal_conf[in_block]
-                ns = np.sum((bc >= 2) & (bc <= 4))
-                nn = np.sum((bc <= 1) | (bc == -1))
-                snr = (ns / nn) if nn > 0 else np.nan
-                if nn > 0 and snr < 0.1:
-                    continue
-
-            block_coords = np.column_stack((lon[in_block], lat[in_block], h[in_block]))
-
-            # ================= Stage 1 =================
-            c1 = count_neighbors_rect_vectorized(block_coords, 100, 20)
-            P1 = find_local_minimum_fast(c1)
-            s1 = block_coords[c1 >= P1]
-            if len(s1) < 10:
-                continue
-
-            # ================= Stage 2 =================
-            c2 = count_neighbors_rect_vectorized(s1, 20, 10)
-            P2 = min(find_local_minimum_fast(c2), np.floor(P1) / 2.0) # 限制阈值过大/小
-            s2 = s1[c2 >= P2]
-            if len(s2) < 8:
-                continue
-
-            # ================= Stage 3 =================
-            slope2, spline2 = _fit_spline_and_slopes(
-                s2[:, 1], s2[:, 2], spar=0.5
-            )
-            regions2 = _assign_regions_by_extrema(s2[:, 1], spline2)
-
-            c3 = count_neighbors_slope_vectorized(s2, slope2, 10, 2)
-            P3 = min(find_local_minimum_fast(c3), np.floor(P2) / 2.0)
-            s3 = s2[c3 >= P3]
-            if len(s3) < 5:
-                continue
-
-            # ================= Stage 4 =================
-            slope3 = slope2[c3 >= P3]
-            regions3 = regions2[c3 >= P3]
-
-            slope_new, _ = _fit_spline_and_slopes(
-                s3[:, 1], s3[:, 2], spar=0.5
-            )
-
-            # ================= Stage 5 =================
-            mask = final_filter_slope_union(
-                s3, slope_new, regions3, L=20.0
-            )
-            if np.sum(mask) < 3:
-                continue
-
-            bottom25 = s3[mask]
-
-            # =================================================
-            # Stage 6 : block 内部 GAM
-            # =================================================
-            lat_b = bottom25[:, 1]
-            lon_b = bottom25[:, 0]
-            elev_b = bottom25[:, 2]
-
-            # ---------- 点数判断
-            if len(lat_b) < 30:
-                elev_spline_b = elev_b.copy()
-            else:
-                # ---------- 标准化输入
-                x_norm = (lat_b - lat_b.mean()) / (lat_b.ptp() + 1e-9)
-                Xb = x_norm.reshape(-1, 1)
-
-                gam = LinearGAM(
-                    s(0, n_splines=40, spline_order=3),
-                    fit_intercept=True
-                ).fit(Xb, elev_b)
-
-                elev_spline_b = gam.predict(Xb)
-
-            egm2008_b, geoid_b = transform_to_egm2008(
-                lon_b, lat_b, elev_spline_b, geoid_interpolator
-            )
-
-            # ---------- collect ----------
-            for i in range(len(lat_b)):
-                out_rows.append((
-                    os.path.basename(ATL03_path),
-                    beam,
-                    lon_b[i],
-                    lat_b[i],
-                    elev_b[i],
-                    elev_spline_b[i],
-                    egm2008_b[i],
-                    geoid_b[i],
-                    snr
-                ))
-
-        if not out_rows:
-            return pd.DataFrame()
-
-        df = pd.DataFrame(
-            out_rows,
-            columns=[
-                "file", "beam",
-                "lon", "lat",
-                "elevation_wgs84",
-                "elevation_spline",
-                "elevation_egm2008",
-                "geoid_height",
-                "SNR"
-            ]
-        )
-
-        quiet_print(
-            f"Completed {beam}: {len(df)} points, "
-            f"Time: {time.time() - beam_start:.1f}s"
-        )
-        return df
-
-    except Exception as e:
-        print(f"Error in {beam}: {e}")
-        return pd.DataFrame()
-
-    finally:
-        gc.collect()
-'''
-
 ####################################################
 ####################################################
 def process_single_file(ATL03_path: str, output_dir: str, index: int, total: int) -> None:
@@ -744,10 +564,10 @@ def process_single_file(ATL03_path: str, output_dir: str, index: int, total: int
                     quiet_print(f"[Skip] {beam}: too few photons ({n_total})")
                     continue
 
-                # land signal confidence（第 1 列）
+                # Land signal confidence is stored in the first column
                 land_conf = signal_conf[:, 0]
 
-                # 置信度筛选
+                # Signal-confidence pre-screening
                 valid_mask = land_conf >= 1
                 n_valid = np.sum(valid_mask)
 
@@ -837,27 +657,27 @@ def tqdm_joblib(tqdm_object):
 
 def main_batch():
 
-    # 要处理的区域["Grid_001", "Grid_002", "Grid_003", "Grid_004"]
+    # Process Grid_001 through Grid_046
     
-    target_regions = ["Grid_005"]
+    target_regions = [f"Grid_{i:03d}" for i in range(1, 47)]
     
     
-    # 预加载geoid
+    # Preload the geoid interpolator
     get_geoid_interpolator("/home/yyr/herui/us_nga_egm2008_1.tif")
     
-    # 处理每个区域
+    # Process each grid region
     for region in target_regions:
         print(f"\n{'='*60}")
-        print(f"开始处理区域: {region}")
+        print(f"Starting region: {region}")
         print(f"{'='*60}")
         
         input_dir = f"/home/yyr/herui/ICESat-2_ATL03/{region}/"
         output_dir = f"/home/yyr/herui/ICESat-2_ATL03_Elevation/{region}/"
         
-        # 创建输出目录
+        # Create the output directory
         os.makedirs(output_dir, exist_ok=True)
         
-        # 获取该区域的所有h5文件
+        # Collect all ATL03 HDF5 files in the region
         all_files = sorted([
             os.path.join(input_dir, f)
             for f in os.listdir(input_dir)
@@ -865,14 +685,14 @@ def main_batch():
         ])
         
         if not all_files:
-            print(f"警告: {input_dir} 中没有找到.h5文件，跳过")
+            print(f"Warning: no .h5 files found in {input_dir}; skipping")
             continue
         
         total_files = len(all_files)
-        print(f"找到 {total_files} 个文件")
+        print(f"Found {total_files} files")
 
-        # 进度条
-        pbar = tqdm(total=total_files, desc=f"处理 {region}", ncols=90, leave=True)
+        # Progress bar
+        pbar = tqdm(total=total_files, desc=f"Processing {region}", ncols=90, leave=True)
         
         with tqdm_joblib(pbar):
             Parallel(
@@ -886,9 +706,9 @@ def main_batch():
                 for i, f in enumerate(all_files, start=1)
             )
         
-        print(f"✅ 区域 {region} 处理完成")
+        print(f"Region {region} completed")
 
-    print("\n✅ 所有指定区域处理完成！")
+    print("\nAll specified regions completed")
 
 
 if __name__ == "__main__":
