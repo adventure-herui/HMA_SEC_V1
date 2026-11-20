@@ -113,10 +113,18 @@ def linear_fit_beam(df):
 
 
 def extract_date_from_filename(filename):
+    """Extract ATL03 acquisition date (YYYYMMDD) from the SE filename."""
     try:
         return datetime.strptime(filename[6:14], "%Y%m%d")
-    except:
+    except (ValueError, TypeError, IndexError):
         return None
+
+
+def format_date_yyyymmdd(date_obj):
+    """Return acquisition date as integer YYYYMMDD for SEC output."""
+    if date_obj is None:
+        return None
+    return int(date_obj.strftime("%Y%m%d"))
 
 
 def calculate_time_diff(date1, date2):
@@ -361,9 +369,12 @@ def process_cross_orbit_pair_wrapper(args):
         # -------- KDTree matching --------
         pairs = find_close_pairs_kdtree(df1f, df2f, MAX_PAIR_DISTANCE)
 
-        # -------- time difference --------
+        # -------- acquisition dates and time difference --------
         d1, d2 = a["date_obj"], d["date_obj"]
-        m, y = calculate_time_diff(d1, d2) if (d1 and d2) else (0, 0)
+        if d1 is None or d2 is None:
+            return results
+
+        m, y = calculate_time_diff(d1, d2)
         abs_m = abs(m)
         abs_y = abs(y)
 
@@ -385,27 +396,33 @@ def process_cross_orbit_pair_wrapper(args):
             if d_check > MAX_PAIR_DISTANCE:
                 continue
 
-            if (d1 is not None and d2 is not None and d1 <= d2):
+            if d1 <= d2:
                 p1_lon, p1_lat, p1_h = float(lon1[ii]), float(lat1[ii]), float(h1[ii])
                 p2_lon, p2_lat, p2_h = float(lon2[jj]), float(lat2[jj]), float(h2[jj])
                 ph1_file, ph1_beam = a["file"], a["beam_name"]
                 ph2_file, ph2_beam = d["file"], d["beam_name"]
+                ph1_date = format_date_yyyymmdd(d1)
+                ph2_date = format_date_yyyymmdd(d2)
             else:
                 p1_lon, p1_lat, p1_h = float(lon2[jj]), float(lat2[jj]), float(h2[jj])
                 p2_lon, p2_lat, p2_h = float(lon1[ii]), float(lat1[ii]), float(h1[ii])
                 ph1_file, ph1_beam = d["file"], d["beam_name"]
                 ph2_file, ph2_beam = a["file"], a["beam_name"]
+                ph1_date = format_date_yyyymmdd(d2)
+                ph2_date = format_date_yyyymmdd(d1)
 
             dh = p2_h - p1_h
 
             results.append({
                 "photon1_file": ph1_file,
                 "photon1_beam": ph1_beam,
+                "photon1_date": ph1_date,
                 "photon1_lon":  p1_lon,
                 "photon1_lat":  p1_lat,
                 "photon1_elevation": p1_h,
                 "photon2_file": ph2_file,
                 "photon2_beam": ph2_beam,
+                "photon2_date": ph2_date,
                 "photon2_lon":  p2_lon,
                 "photon2_lat":  p2_lat,
                 "photon2_elevation": p2_h,
@@ -480,18 +497,24 @@ def process_repeat_orbit_pair_wrapper(args):
                 p2_lon, p2_lat, p2_h = float(lon2[j]), float(lat2[j]), float(h2[j])
                 ph1_file, ph1_beam = b1["file"], b1["beam_name"]
                 ph2_file, ph2_beam = b2["file"], b2["beam_name"]
+                ph1_date = format_date_yyyymmdd(d1)
+                ph2_date = format_date_yyyymmdd(d2)
             else:
                 p1_lon, p1_lat, p1_h = float(lon2[j]), float(lat2[j]), float(h2[j])
                 p2_lon, p2_lat, p2_h = float(lon1[i]), float(lat1[i]), float(h1[i])
                 ph1_file, ph1_beam = b2["file"], b2["beam_name"]
                 ph2_file, ph2_beam = b1["file"], b1["beam_name"]
+                ph1_date = format_date_yyyymmdd(d2)
+                ph2_date = format_date_yyyymmdd(d1)
 
             dh = p2_h - p1_h
 
             results.append({
                 "photon1_file": ph1_file, "photon1_beam": ph1_beam,
+                "photon1_date": ph1_date,
                 "photon1_lon": p1_lon, "photon1_lat": p1_lat, "photon1_elevation": p1_h,
                 "photon2_file": ph2_file, "photon2_beam": ph2_beam,
+                "photon2_date": ph2_date,
                 "photon2_lon": p2_lon, "photon2_lat": p2_lat, "photon2_elevation": p2_h,
                 "distance": d_check,
                 "elevation_diff": float(dh),
