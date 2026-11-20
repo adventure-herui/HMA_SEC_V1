@@ -12,8 +12,8 @@ import pandas as pd
 import numpy as np
 import geopandas as gpd
 from shapely.geometry import Point, Polygon
-from shapely.prepared import prep  # <<< PERF >>>
-from shapely import wkb            # <<< PERF >>>
+from shapely.prepared import prep  # Performance
+from shapely import wkb            # Performance
 from pathlib import Path
 from tqdm import tqdm
 import warnings
@@ -27,7 +27,7 @@ import pyarrow.parquet as pq
 
 warnings.filterwarnings("ignore")
 
-# ================= 全局路径配置 =================
+# Global path configuration
 BASE_ELEV_DIR = "/home/yyr/herui/ICESat-2_ATL03_Elevation/"
 BASE_DH_DIR   = "/home/yyr/herui/ICESat-2_ATL03_Dh/"
 BASE_SHP_DIR  = "/home/yyr/herui/HMA_Subregion/"
@@ -39,23 +39,23 @@ MIN_POINTS_FOR_SAMPLING = 1000
 
 NUM_CORES = max(1, mp.cpu_count() // 6)
 
-# <<< PERF >>> 关键：不要极细粒度 (chunksize=1) 处理百万级 micro-task 会被调度开销拖死
-# 读取 Parquet 属于“重任务”，适合中等粒度
+# Avoid overly fine task granularity for large numbers of micro-tasks
+# Parquet reading uses moderate task granularity
 IMAP_CHUNKSIZE = 1
 
-# 交叉/重复属于“微任务百万级”，适合中等粒度，才能吃满 CPU
+# Cross-track and repeat-track pairing use moderate batch sizes
 BATCH_SIZE_CROSS  = 64
 BATCH_SIZE_REPEAT = 2
 
 SLOPE_EPS = 1e-9
 R_EARTH = 6371000.0
 
-# <<< PERF >>> worker 共享 prepared geometry（避免每任务 GeoDataFrame contains 的 Python/GeoPandas 开销）
+# Worker-local prepared geometry and beam cache
 _GLOBAL_PREP_GEOM = None
 _GLOBAL_BEAMS = None
 
 # ============================================
-# ================= 基础函数 =================
+# Basic functions
 # ============================================
 
 @jit(nopython=True, fastmath=True, nogil=True)
@@ -128,7 +128,7 @@ def format_date_yyyymmdd(date_obj):
 
 
 def calculate_time_diff(date1, date2):
-    """返回 (months, years)，可能为负；最终写表时取绝对值。"""
+    """Return calendar-month and year differences; absolute values are written to output."""
     if date1 is None or date2 is None:
         return 0, 0
     months = (date2.year - date1.year) * 12 + (date2.month - date1.month)
@@ -137,7 +137,7 @@ def calculate_time_diff(date1, date2):
 
 
 def _lonlat_to_unitvec(lon_deg: np.ndarray, lat_deg: np.ndarray) -> np.ndarray:
-    """(lon, lat) -> 单位球面 (x,y,z)，float64"""
+    """Convert longitude and latitude to float64 unit-sphere coordinates."""
     lon = np.radians(lon_deg.astype(np.float64))
     lat = np.radians(lat_deg.astype(np.float64))
     clat = np.cos(lat)
@@ -148,31 +148,31 @@ def _lonlat_to_unitvec(lon_deg: np.ndarray, lat_deg: np.ndarray) -> np.ndarray:
 
 
 def find_close_pairs_kdtree(df1, df2, max_distance_m: float):
-    """KDTree + Haversine 查找点对，双向唯一匹配"""
+    """Find photon pairs using KDTree candidates, Haversine distance, and one-to-one matching."""
     n1, n2 = len(df1), len(df2)
     if n1 == 0 or n2 == 0:
         return []
 
-    # 单位球坐标
+    # Unit-sphere coordinates
     P1 = _lonlat_to_unitvec(df1["lon"].values, df1["lat"].values)
     P2 = _lonlat_to_unitvec(df2["lon"].values, df2["lat"].values)
 
-    # 球心角 & 弦长半径
+    # Angular and chord-distance search radius
     theta = max_distance_m / R_EARTH
     r_chord = 2.0 * np.sin(theta * 0.5)
 
-    # KDTree 搜索
-    # <<< PERF >>> 进程并行已经足够，禁止 KDTree 内部 workers=-1 造成进程×线程爆炸
+    # KDTree candidate search
+    # Use one KDTree worker because process-level parallelism is already enabled
     tree = cKDTree(P2)
     cand = tree.query_ball_point(P1, r=r_chord, workers=1)
 
-    # 经纬度数组
+    # Coordinate arrays
     lat1 = df1["lat"].values.astype(np.float64)
     lon1 = df1["lon"].values.astype(np.float64)
     lat2 = df2["lat"].values.astype(np.float64)
     lon2 = df2["lon"].values.astype(np.float64)
 
-    # 收集所有候选点对
+    # Collect candidate pairs
     candidates = []
     for i, js in enumerate(cand):
         if not js:
@@ -183,10 +183,10 @@ def find_close_pairs_kdtree(df1, df2, max_distance_m: float):
             if d <= max_distance_m:
                 candidates.append((i, j, d))
 
-    # 距离升序排序
+    # Sort candidates by increasing distance
     candidates.sort(key=lambda x: x[2])
 
-    # 双向唯一匹配
+    # Enforce one-to-one matching within this beam-pair comparison
     matched_i = set()
     matched_j = set()
     pairs = []
@@ -211,22 +211,22 @@ def find_intersection(s1, c1, s2, c2):
 
 
 def beam_polygon(beam, buffer_m=5.0):
-    """根据线性拟合结果，生成沿轨道方向的窄矩形 polygon"""
+    """Create a narrow along-track polygon from the fitted beam line."""
     slope, intercept = beam["slope"], beam["intercept"]
     lon_min, lon_max = beam["lon_min"], beam["lon_max"]
 
-    # 起点和终点
+    # Beam endpoints
     p1 = np.array([lon_min, slope*lon_min + intercept])
     p2 = np.array([lon_max, slope*lon_max + intercept])
 
-    # 方向和法向量
+    # Along-track and normal vectors
     v = p2 - p1
     if np.linalg.norm(v) == 0:
         return None
     v = v / np.linalg.norm(v)
     n = np.array([-v[1], v[0]])
 
-    # 经纬度到米的换算
+    # Approximate degree-to-meter conversion
     lat_mean = (beam["lat_min"] + beam["lat_max"]) / 2
     meters_per_deg_lat = 111000.0
     meters_per_deg_lon = 111000.0 * np.cos(np.radians(lat_mean))
@@ -235,7 +235,7 @@ def beam_polygon(beam, buffer_m=5.0):
     dlat = (buffer_m / meters_per_deg_lat) * n[1]
     offset = np.array([dlon, dlat])
 
-    # 矩形四个角点
+    # Polygon corners
     c1 = p1 + offset
     c2 = p2 + offset
     c3 = p2 - offset
@@ -252,7 +252,7 @@ def beam_polygons_overlap(b1, b2, buffer_m=10.0):
     return poly1.intersects(poly2)
 
 
-def process_single_csv(file_path):
+def process_single_parquet(file_path):
     out = []
     try:
         table = pq.read_table(
@@ -297,11 +297,11 @@ def process_single_csv(file_path):
         return out
 
     except Exception as e:
-        print(f"处理文件 {file_path} 出错: {e}")
+        print(f"Error processing file {file_path}: {e}")
         return out
 
 
-# <<< PERF >>> Pool initializer：prepared geometry + numba 预热（避免 96 次冷启动）
+# Pool initializer for prepared geometry, beam cache, and Numba warm-up
 def _pool_initializer(prep_geom_wkb: bytes, beams):
     global _GLOBAL_PREP_GEOM, _GLOBAL_BEAMS
 
@@ -320,13 +320,13 @@ def _pool_initializer(prep_geom_wkb: bytes, beams):
     )
 
 
-# ================= 交叉轨道对 =================
+# Cross-track photon pairs
 def process_cross_orbit_pair_wrapper(args):
 
     results = []
 
     try:
-        # <<< KEY CHANGE >>> fetch beams from worker-local cache
+        # Key change fetch beams from worker-local cache
         i, j = args
         a = _GLOBAL_BEAMS[i]
         d = _GLOBAL_BEAMS[j]
@@ -436,20 +436,20 @@ def process_cross_orbit_pair_wrapper(args):
             })
 
     except Exception as e:
-        print(f"处理交叉轨道对时出错: {e}")
+        print(f"Error processing cross-track pair: {e}")
 
     return results
 
 
 
-# ================= 重复轨道对 =================
+# Repeat-track photon pairs
 def process_repeat_orbit_pair_wrapper(args):
     b1, b2, orbit_type = args
     results = []
     try:
-        if b1["file"] == b2["file"]: # 同轨道 + 同文件 ==》 直接跳过
+        if b1["file"] == b2["file"]:  # Skip identical source files
             return results
-        if not beam_polygons_overlap(b1, b2, buffer_m=10.0): # 两波束外包矩形没有交集 ==》 直接跳过
+        if not beam_polygons_overlap(b1, b2, buffer_m=10.0):  # Skip non-overlapping beams
             return results
 
         min_lon = max(b1["lon_min"], b2["lon_min"])
@@ -463,7 +463,7 @@ def process_repeat_orbit_pair_wrapper(args):
         # df1 = df1[(df1["lon"] >= min_lon) & (df1["lon"] <= max_lon) & (df1["lat"] >= min_lat) & (df1["lat"] <= max_lat)].reset_index(drop=True)
         # df2 = df2[(df2["lon"] >= min_lon) & (df2["lon"] <= max_lon) & (df2["lat"] >= min_lat) & (df2["lat"] <= max_lat)].reset_index(drop=True)
         
-        # 只限制纬度
+        # Restrict to the overlapping latitude range
         df1 = df1[(df1["lat"] >= min_lat) & (df1["lat"] <= max_lat)].reset_index(drop=True)
         df2 = df2[(df2["lat"] >= min_lat) & (df2["lat"] <= max_lat)].reset_index(drop=True)
 
@@ -525,12 +525,12 @@ def process_repeat_orbit_pair_wrapper(args):
                 "type": f"repeat_{orbit_type}"
             })
     except Exception as e:
-        print(f"处理重复轨道对时出错: {e}")
+        print(f"Error processing repeat-track pair: {e}")
     return results
 
 
 def process_repeat_orbit_pair_and_write(args):
-    """worker 直接写 parquet 分片"""
+    """Write one repeat-track Parquet part directly from a worker."""
     idx, task, out_dir = args
     results = process_repeat_orbit_pair_wrapper(task)
     if not results:
@@ -542,7 +542,7 @@ def process_repeat_orbit_pair_and_write(args):
 
 
 def write_repeat_pairs_to_parquet(tasks, path, desc, chunksize=1, merge=True):
-    """并行生成分片 → 可选合并为一个大文件"""
+    """Generate Parquet parts in parallel and optionally merge them."""
     out_dir = path.parent / f"{path.stem}_parts"
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -553,7 +553,7 @@ def write_repeat_pairs_to_parquet(tasks, path, desc, chunksize=1, merge=True):
                           total=len(tasks), desc=desc):
             total_count += count
 
-    print(f"{desc} 分片已写入目录: {out_dir}")
+    print(f"{desc} parts written to: {out_dir}")
 
     if merge:
         files = sorted(out_dir.glob("part_*.parquet"))
@@ -563,7 +563,7 @@ def write_repeat_pairs_to_parquet(tasks, path, desc, chunksize=1, merge=True):
         schema = None
         writer = None
         try:
-            for f in tqdm(files, desc=f"合并 {desc}"):
+            for f in tqdm(files, desc=f"Merging {desc}"):
                 table = pq.read_table(f)
                 if schema is None:
                     schema = table.schema
@@ -573,21 +573,21 @@ def write_repeat_pairs_to_parquet(tasks, path, desc, chunksize=1, merge=True):
             if writer:
                 writer.close()
 
-        print(f"{desc} 已合并保存为单文件: {path}")
-        # 可选：清理分片目录
+        print(f"{desc} merged and saved to: {path}")
+        # Optional cleanup of the part directory
         # import shutil; shutil.rmtree(out_dir)
 
     return total_count
 
 
-# ================= 区域级处理函数 =================
+# Region-level processing
 def process_region(region_name: str):
 
     print("\n" + "=" * 60)
-    print(f"开始处理区域（Parquet 高程产品）：{region_name}")
+    print(f"Starting region with Parquet SE products: {region_name}")
     print("=" * 60)
 
-    # ================= 路径构造 =================
+    # Build input and output paths
     parquet_dir = Path(BASE_ELEV_DIR) / region_name
     out_dir     = Path(BASE_DH_DIR) / region_name
     shp_path    = Path(BASE_SHP_DIR) / f"{region_name}.shp"
@@ -595,50 +595,50 @@ def process_region(region_name: str):
     out_dir.mkdir(parents=True, exist_ok=True)
 
     if not parquet_dir.exists():
-        print(f"[警告] Parquet 高程目录不存在，跳过：{parquet_dir}")
+        print(f"Warning: Parquet SE directory does not exist; skipping: {parquet_dir}")
         return
 
     if not shp_path.exists():
-        print(f"[警告] Shapefile 不存在，跳过：{shp_path}")
+        print(f"Warning: shapefile does not exist; skipping: {shp_path}")
         return
 
-    # ================= 读取研究区 =================
-    print(f"读取研究区矢量边界：{shp_path}")
+    # Read the study-area boundary
+    print(f"Reading study-area boundary: {shp_path}")
     study_area = gpd.read_file(shp_path)
 
-    # <<< PERF >>> 为 prepared geometry 准备 union（判断仍等价于“在任一面内”）
+    # Build a union geometry for prepared spatial containment tests
     union_geom = study_area.geometry.unary_union
     prep_wkb = union_geom.wkb
 
-    # ================= 读取 Parquet 文件 ================
+    # Read Parquet SE files
     files = list(parquet_dir.glob("*.parquet"))
-    print(f"发现 {len(files)} 个 Parquet 高程文件，使用 {NUM_CORES} 核心并行解析...")
+    print(f"Found {len(files)} Parquet SE files; parsing with {NUM_CORES} processes...")
 
     if len(files) == 0:
-        print(f"[提示] 区域 {region_name} 无 Parquet 高程文件，跳过。")
+        print(f"No Parquet SE files found for {region_name}; skipping.")
         return
 
-    # ================= 并行解析 Parquet → beam 级结构 =================
+    # Parse Parquet files into beam-level structures in parallel
     with mp.Pool(NUM_CORES) as pool:
         beams_nested = list(tqdm(
-            pool.imap(process_single_csv, files, chunksize=IMAP_CHUNKSIZE),
+            pool.imap(process_single_parquet, files, chunksize=IMAP_CHUNKSIZE),
             total=len(files),
-            desc=f"解析 Parquet（{region_name}）"
+            desc=f"Parsing Parquet ({region_name})"
         ))
 
     beams = [b for sub in beams_nested for b in sub]
-    print(f"解析完成：共获得 {len(beams)} 条 beam 轨道")
+    print(f"Parsing completed: {len(beams)} beam observations")
 
     if len(beams) == 0:
-        print(f"[提示] 区域 {region_name} 无有效 beam，跳过。")
+        print(f"No valid beam observations found for {region_name}; skipping.")
         return
 
-    # ================= 上升 / 下降束分类 =================
+    # Classify ascending and descending beam observations
     asc_idx  = [i for i, b in enumerate(beams) if b["slope"] < -SLOPE_EPS]
     desc_idx = [i for i, b in enumerate(beams) if b["slope"] >  SLOPE_EPS]
-    print(f"轨道分类完成：上升束 {len(asc_idx)}，下降束 {len(desc_idx)}")
+    print(f"Beam classification completed: ascending={len(asc_idx)}, descending={len(desc_idx)}")
 
-    # ================= 构建交叉 / 重复候选任务 =================
+    # Build cross-track and repeat-track candidate tasks
 
     cross_tasks = []
     for i in asc_idx:
@@ -647,10 +647,10 @@ def process_region(region_name: str):
             if bi["file"] == bj["file"]:
                 continue
             if beam_polygons_overlap(bi, bj, buffer_m=10.0):
-                cross_tasks.append((i, j))   # <<< 只传 index
+                cross_tasks.append((i, j))  # Pass beam indices only
             
                 
-    print(f"交叉轨道候选任务数：{len(cross_tasks)}")
+    print(f"Cross-track candidate tasks: {len(cross_tasks)}")
 
     rep_asc_tasks = []
     for a in range(len(asc_idx)):
@@ -672,9 +672,9 @@ def process_region(region_name: str):
             if beam_polygons_overlap(bi, bj, buffer_m=10.0):
                 rep_desc_tasks.append((bi, bj, "desc"))
 
-    print(f"重复轨道候选：上升 {len(rep_asc_tasks)}，下降 {len(rep_desc_tasks)}")
+    print(f"Repeat-track candidates: ascending={len(rep_asc_tasks)}, descending={len(rep_desc_tasks)}")
 
-    # ================== 1. 交叉点对 ==================
+    # Cross-track photon pairs
     cross_pairs = []
     if cross_tasks:
         with mp.Pool(NUM_CORES, 
@@ -688,13 +688,13 @@ def process_region(region_name: str):
                     chunksize=BATCH_SIZE_CROSS
                 ),
                 total=len(cross_tasks),
-                desc=f"交叉点对计算（{region_name}）"
+                desc=f"Cross-track pairing ({region_name})"
             ))
         cross_pairs = [r for sub in cross_chunks for r in sub]
         del cross_chunks
         gc.collect()
 
-    print(f"交叉点对数量：{len(cross_pairs)}")
+    print(f"Cross-track photon pairs: {len(cross_pairs)}")
     if cross_pairs:
         cross_path = out_dir / "optimized_cross_pairs.parquet"
         pd.DataFrame(cross_pairs).to_parquet(
@@ -703,117 +703,84 @@ def process_region(region_name: str):
             compression="snappy",
             index=False
         )
-        print(f"✔ 已保存交叉点对：{cross_path}")
+        print(f"Saved cross-track photon pairs: {cross_path}")
 
     del cross_pairs
     gc.collect()
 
-    # ================== 2. 上升重复点对 ==================
+    # Ascending repeat-track photon pairs
     rep_asc_path = out_dir / "optimized_repeat_asc_pairs.parquet"
     if rep_asc_tasks:
         rep_asc_count = write_repeat_pairs_to_parquet(
             rep_asc_tasks,
             rep_asc_path,
-            f"上升重复点对（{region_name}）",
+            f"Ascending repeat-track pairs ({region_name})",
             chunksize=BATCH_SIZE_REPEAT,
             merge=True
         )
-        print(f"✔ 已保存上升重复点对：{rep_asc_path}，数量：{rep_asc_count}")
+        print(f"Saved ascending repeat-track pairs: {rep_asc_path}, count={rep_asc_count}")
 
     gc.collect()
 
-    # ================== 3. 下降重复点对 ==================
+    # Descending repeat-track photon pairs
     rep_desc_path = out_dir / "optimized_repeat_desc_pairs.parquet"
     if rep_desc_tasks:
         rep_desc_count = write_repeat_pairs_to_parquet(
             rep_desc_tasks,
             rep_desc_path,
-            f"下降重复点对（{region_name}）",
+            f"Descending repeat-track pairs ({region_name})",
             chunksize=BATCH_SIZE_REPEAT,
             merge=True
         )
-        print(f"✔ 已保存下降重复点对：{rep_desc_path}，数量：{rep_desc_count}")
+        print(f"Saved descending repeat-track pairs: {rep_desc_path}, count={rep_desc_count}")
 
     gc.collect()
 
     print(
-        f"✅ 区域 {region_name} 处理完成 | "
-        f"交叉候选={len(cross_tasks)}, "
-        f"上升重复候选={len(rep_asc_tasks)}, "
-        f"下降重复候选={len(rep_desc_tasks)}"
+        f"Region {region_name} completed | "
+        f"cross_candidates={len(cross_tasks)}, "
+        f"repeat_ascending_candidates={len(rep_asc_tasks)}, "
+        f"repeat_descending_candidates={len(rep_desc_tasks)}"
     )
 
 
-# ================= 主程序：循环所有区域 =================
-from pathlib import Path
-import gc
-import time
+# Main program
 
 def main():
-    base_elev = Path(BASE_ELEV_DIR)
-    base_dh   = Path(BASE_DH_DIR)
-    base_shp  = Path(BASE_SHP_DIR)
+    Path(BASE_DH_DIR).mkdir(parents=True, exist_ok=True)
 
-    base_dh.mkdir(parents=True, exist_ok=True)
+    target_regions = [f"Grid_{i:03d}" for i in range(1, 47)]
 
-    # 排除问题区域
-    exclude_grids = {
-        "Grid_001", "Grid_002", "Grid_003", "Grid_004", "Grid_006", "Grid_007", "Grid_008", "Grid_009","Grid_010", 
-        "Grid_011", "Grid_012", "Grid_013", "Grid_014", "Grid_015", "Grid_016", "Grid_017", "Grid_018", "Grid_019", "Grid_020", 
-        "Grid_021", "Grid_022", "Grid_023", "Grid_024", "Grid_025", "Grid_026", "Grid_027", "Grid_028", "Grid_029", "Grid_030",
-        "Grid_031", "Grid_032", "Grid_033", "Grid_034", "Grid_035", "Grid_036", "Grid_037", "Grid_038", "Grid_039", "Grid_040",
-        "Grid_041", "Grid_042", "Grid_043", "Grid_044", "Grid_045", "Grid_046"
-    }
+    print("SEC pairing will run for the following regions:")
+    for region_name in target_regions:
+        print(" -", region_name)
 
-    region_folders = sorted(
-        p for p in base_elev.iterdir()
-        if p.is_dir() and p.name not in exclude_grids
-    )
-
-    if not region_folders:
-        print(f"[错误] 在 {base_elev} 下没有找到任何区域子文件夹。")
-        return
-
-    print("将在以下区域上运行点对检测：")
-    for p in region_folders:
-        print(" -", p.name)
-
-    # ====================================================
-    # 主循环：逐区域处理 + 强制内存清理
-    # ====================================================
-    for i, region_dir in enumerate(region_folders, start=1):
-        region_name = region_dir.name
-        print(f"\n▶ [{i}/{len(region_folders)}] 开始处理区域：{region_name}")
+    for i, region_name in enumerate(target_regions, start=1):
+        print(f"\n[{i}/{len(target_regions)}] Starting region: {region_name}")
 
         try:
             process_region(region_name)
         except Exception as e:
-            print(f"❌ 区域 {region_name} 处理失败：{e}")
+            print(f"Region {region_name} failed: {e}")
             continue
 
-        # ====================================================
-        # ⭐ 关键：区域级内存清理（防止后续区域崩溃）
-        # ====================================================
         try:
-            # Python 垃圾回收
             gc.collect()
 
-            # 如果你使用了 PyArrow / Parquet（强烈推荐）
             try:
                 import pyarrow as pa
                 pa.default_memory_pool().release_unused()
             except Exception:
                 pass
 
-            # 给 OS 一点时间回收内存
             time.sleep(1)
 
         except Exception as e:
-            print(f"⚠ 内存清理阶段出现异常：{e}")
+            print(f"Memory cleanup warning: {e}")
 
-        print(f"✔ 区域 {region_name} 完成并已清理内存")
+        print(f"Region {region_name} completed and memory was released")
 
-    print("\n✅ 所选区域处理完成！")
+    print("\nAll specified regions completed")
 
 
 if __name__ == "__main__":
