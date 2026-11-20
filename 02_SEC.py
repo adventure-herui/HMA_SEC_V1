@@ -430,7 +430,7 @@ def process_cross_orbit_pair_wrapper(args):
                 "elevation_diff": float(dh),
                 "months_diff": abs_m,
                 "years_diff": float(abs_y),
-                "monthly_change_rate": float(dh / abs_m) if abs_m > 0 else 0.0,
+                "monthly_change_rate": float(dh / abs_m) if abs_m > 0 else np.nan,
                 "yearly_change_rate":  float(dh / abs_y) if abs_y > 0 else 0.0,
                 "type": "cross"
             })
@@ -520,7 +520,7 @@ def process_repeat_orbit_pair_wrapper(args):
                 "elevation_diff": float(dh),
                 "months_diff": abs_m,
                 "years_diff": float(abs_y),
-                "monthly_change_rate": float(dh / abs_m) if abs_m > 0 else 0.0,
+                "monthly_change_rate": float(dh / abs_m) if abs_m > 0 else np.nan,
                 "yearly_change_rate":  float(dh / abs_y) if abs_y > 0 else 0.0,
                 "type": f"repeat_{orbit_type}"
             })
