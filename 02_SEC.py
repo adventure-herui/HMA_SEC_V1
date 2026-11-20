@@ -20,17 +20,24 @@ import warnings
 import multiprocessing as mp
 from datetime import datetime
 from scipy.spatial import cKDTree
+from scipy import ndimage
+from pyproj import Transformer
+import rasterio
+from rasterio.warp import calculate_default_transform, reproject
+from rasterio.enums import Resampling
 import gc
 
 from numba import jit, prange
+import pyarrow as pa
 import pyarrow.parquet as pq
 
 warnings.filterwarnings("ignore")
 
 # Global path configuration
 BASE_ELEV_DIR = "/home/yyr/herui/ICESat-2_ATL03_Elevation/"
-BASE_DH_DIR   = "/home/yyr/herui/ICESat-2_ATL03_Dh/"
+BASE_DH_DIR   = "/home/yyr/herui/ICESat-2_ATL03_Dh_uncertainty_Revised/"
 BASE_SHP_DIR  = "/home/yyr/herui/HMA_Subregion/"
+BASE_DEM_DIR  = Path("/home/yyr/herui/HMA_SRTM_DEM_30m")
 
 CROSS_BUFFER_RADIUS = 5
 MAX_PAIR_DISTANCE   = 2
@@ -49,6 +56,37 @@ BATCH_SIZE_REPEAT = 2
 
 SLOPE_EPS = 1e-9
 R_EARTH = 6371000.0
+
+# Uncertainty settings. Two epoch-specific SE errors are assumed uncorrelated.
+RHO = 0.0
+MAX_SLOPE = 45.0
+DST_CRS = "EPSG:32643"
+UNCERTAINTY_BATCH_SIZE = 250_000
+
+FINAL_COLUMN_ORDER = [
+    "photon1_file",
+    "photon2_file",
+    "photon1_beam",
+    "photon2_beam",
+    "photon1_lon",
+    "photon1_lat",
+    "photon2_lon",
+    "photon2_lat",
+    "photon1_elevation",
+    "photon2_elevation",
+    "photon1_date",
+    "photon2_date",
+    "distance",
+    "elevation_diff",
+    "months_diff",
+    "years_diff",
+    "monthly_change_rate",
+    "yearly_change_rate",
+    "type",
+    "slope_photon1",
+    "slope_photon2",
+    "sigma_dH",
+]
 
 # Worker-local prepared geometry and beam cache
 _GLOBAL_PREP_GEOM = None
@@ -299,6 +337,266 @@ def process_single_parquet(file_path):
     except Exception as e:
         print(f"Error processing file {file_path}: {e}")
         return out
+
+
+# ============================================
+# Slope and uncertainty functions
+# ============================================
+
+def compute_slope_from_dem(dem_array, transform):
+    """Compute terrain slope in degrees using the same Sobel method as the released dataset."""
+    xres = transform.a
+    yres = -transform.e
+    dzdx = ndimage.sobel(dem_array, axis=1, mode="nearest") / (8.0 * xres)
+    dzdy = ndimage.sobel(dem_array, axis=0, mode="nearest") / (8.0 * yres)
+    return np.degrees(np.arctan(np.sqrt(dzdx ** 2 + dzdy ** 2)))
+
+
+def slope_to_bin(slope):
+    """Apply the slope binning used by the released uncertainty dataset."""
+    slope = np.asarray(slope, dtype=np.float64)
+    return np.where(
+        slope < 15.0,
+        np.floor(slope),
+        np.floor(slope / 5.0) * 5.0
+    )
+
+
+def rmse_from_bin(slope_bin):
+    """Convert slope bins to single-epoch SE uncertainty in meters."""
+    slope_bin = np.asarray(slope_bin, dtype=np.float64)
+    rmse = 0.187 + 0.149 * np.log(slope_bin + 1.0)
+    rmse[~np.isfinite(slope_bin)] = np.nan
+    return rmse
+
+
+def prepare_slope_raster(region_name):
+    """
+    Read the SRTM DEM for one Grid, reproject it using the same CRS and
+    bilinear resampling as the released uncertainty workflow, and compute
+    the slope raster once for all SEC files in that Grid.
+    """
+    grid_id = region_name.split("_")[1]
+    dem_path = BASE_DEM_DIR / f"SRTM_30m_{grid_id}.tif"
+
+    if not dem_path.exists():
+        raise FileNotFoundError(f"SRTM DEM not found: {dem_path}")
+
+    print(f"Preparing slope raster from: {dem_path}")
+
+    with rasterio.open(dem_path) as src:
+        dem = src.read(1).astype(np.float32)
+        src_crs = src.crs
+        src_transform = src.transform
+        bounds = src.bounds
+
+    dst_transform, width, height = calculate_default_transform(
+        src_crs,
+        DST_CRS,
+        dem.shape[1],
+        dem.shape[0],
+        *bounds
+    )
+
+    dem_utm = np.empty((height, width), dtype=np.float32)
+
+    reproject(
+        source=dem,
+        destination=dem_utm,
+        src_transform=src_transform,
+        src_crs=src_crs,
+        dst_transform=dst_transform,
+        dst_crs=DST_CRS,
+        resampling=Resampling.bilinear,
+    )
+
+    slope_utm = compute_slope_from_dem(dem_utm, dst_transform)
+    slope_utm = np.clip(slope_utm, 0.0, MAX_SLOPE).astype(np.float32)
+
+    transformer = Transformer.from_crs(
+        "EPSG:4326",
+        DST_CRS,
+        always_xy=True
+    )
+
+    del dem, dem_utm
+    gc.collect()
+
+    return slope_utm, dst_transform, transformer
+
+
+def reorder_final_columns(df):
+    """Write the released 22 fields first and preserve any unexpected extras afterward."""
+    preferred = [c for c in FINAL_COLUMN_ORDER if c in df.columns]
+    extras = [c for c in df.columns if c not in preferred]
+    return df[preferred + extras]
+
+
+def add_uncertainty_to_parquet(parquet_path, slope_utm, slope_transform, transformer):
+    """
+    Add slope_photon1, slope_photon2, and sigma_dH to one final SEC Parquet file.
+
+    The file is processed in batches and atomically replaced only after the
+    enriched file has been written successfully.
+    """
+    parquet_path = Path(parquet_path)
+
+    if not parquet_path.exists():
+        return 0
+
+    pf = pq.ParquetFile(parquet_path)
+    if pf.metadata.num_rows == 0:
+        return 0
+
+    required = {
+        "photon1_lon",
+        "photon1_lat",
+        "photon2_lon",
+        "photon2_lat",
+    }
+    missing = sorted(required.difference(pf.schema_arrow.names))
+    if missing:
+        raise KeyError(
+            f"{parquet_path} is missing required coordinate fields: {missing}"
+        )
+
+    tmp_path = parquet_path.with_name(
+        parquet_path.stem + ".uncertainty_tmp.parquet"
+    )
+    if tmp_path.exists():
+        tmp_path.unlink()
+
+    writer = None
+    output_schema = None
+    total_rows = 0
+
+    try:
+        for batch in pf.iter_batches(
+            batch_size=UNCERTAINTY_BATCH_SIZE,
+            use_threads=True
+        ):
+            df = batch.to_pandas()
+
+            lon1 = df["photon1_lon"].to_numpy(dtype=np.float64, copy=False)
+            lat1 = df["photon1_lat"].to_numpy(dtype=np.float64, copy=False)
+            lon2 = df["photon2_lon"].to_numpy(dtype=np.float64, copy=False)
+            lat2 = df["photon2_lat"].to_numpy(dtype=np.float64, copy=False)
+
+            x1, y1 = transformer.transform(lon1, lat1)
+            x2, y2 = transformer.transform(lon2, lat2)
+
+            r1, c1 = rasterio.transform.rowcol(slope_transform, x1, y1)
+            r2, c2 = rasterio.transform.rowcol(slope_transform, x2, y2)
+
+            r1 = np.asarray(r1, dtype=np.int64)
+            c1 = np.asarray(c1, dtype=np.int64)
+            r2 = np.asarray(r2, dtype=np.int64)
+            c2 = np.asarray(c2, dtype=np.int64)
+
+            r1 = np.clip(r1, 0, slope_utm.shape[0] - 1)
+            c1 = np.clip(c1, 0, slope_utm.shape[1] - 1)
+            r2 = np.clip(r2, 0, slope_utm.shape[0] - 1)
+            c2 = np.clip(c2, 0, slope_utm.shape[1] - 1)
+
+            slope1 = slope_utm[r1, c1]
+            slope2 = slope_utm[r2, c2]
+
+            sb1 = slope_to_bin(slope1)
+            sb2 = slope_to_bin(slope2)
+
+            sigma1 = rmse_from_bin(sb1)
+            sigma2 = rmse_from_bin(sb2)
+
+            sigma_dh = np.sqrt(
+                sigma2 ** 2
+                + sigma1 ** 2
+                - 2.0 * RHO * sigma2 * sigma1
+            )
+
+            df["slope_photon1"] = slope1.astype(np.float32)
+            df["slope_photon2"] = slope2.astype(np.float32)
+            df["sigma_dH"] = sigma_dh.astype(np.float32)
+
+            df = reorder_final_columns(df)
+
+            table = pa.Table.from_pandas(
+                df,
+                preserve_index=False
+            )
+
+            if writer is None:
+                output_schema = table.schema
+                writer = pq.ParquetWriter(
+                    tmp_path,
+                    output_schema,
+                    compression="snappy"
+                )
+            elif table.schema != output_schema:
+                table = table.cast(output_schema)
+
+            writer.write_table(table)
+            total_rows += len(df)
+
+        if writer is not None:
+            writer.close()
+            writer = None
+
+        os.replace(tmp_path, parquet_path)
+
+    except Exception:
+        if writer is not None:
+            writer.close()
+        if tmp_path.exists():
+            tmp_path.unlink()
+        raise
+
+    print(
+        f"Added slope and SEC uncertainty: {parquet_path} "
+        f"({total_rows:,} rows)"
+    )
+
+    return total_rows
+
+
+def add_uncertainty_to_region_outputs(region_name, out_dir):
+    """
+    Enrich all final SEC products in one Grid after pairing is complete.
+    This keeps the pairing workers unchanged and avoids copying a large
+    slope raster into multiprocessing workers.
+    """
+    final_files = [
+        Path(out_dir) / "optimized_cross_pairs.parquet",
+        Path(out_dir) / "optimized_repeat_asc_pairs.parquet",
+        Path(out_dir) / "optimized_repeat_desc_pairs.parquet",
+    ]
+
+    existing = [p for p in final_files if p.exists()]
+    if not existing:
+        print(f"No final SEC files found for uncertainty enrichment: {region_name}")
+        return
+
+    print("\n" + "-" * 60)
+    print(f"Adding slope and uncertainty fields: {region_name}")
+    print("-" * 60)
+
+    slope_utm, slope_transform, transformer = prepare_slope_raster(region_name)
+
+    try:
+        for path in existing:
+            add_uncertainty_to_parquet(
+                path,
+                slope_utm,
+                slope_transform,
+                transformer
+            )
+    finally:
+        del slope_utm
+        gc.collect()
+        try:
+            pa.default_memory_pool().release_unused()
+        except Exception:
+            pass
+
 
 
 # Pool initializer for prepared geometry, beam cache, and Numba warm-up
@@ -735,6 +1033,10 @@ def process_region(region_name: str):
         print(f"Saved descending repeat-track pairs: {rep_desc_path}, count={rep_desc_count}")
 
     gc.collect()
+
+    # Add terrain slope and propagated SEC uncertainty to all final products.
+    # This step also standardizes the final field order to match the released data.
+    add_uncertainty_to_region_outputs(region_name, out_dir)
 
     print(
         f"Region {region_name} completed | "
