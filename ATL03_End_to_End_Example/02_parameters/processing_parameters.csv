@@ -1,0 +1,22 @@
+parameter,value,unit,description
+minimum_raw_photons_per_beam,50.0,photons,Minimum local raw photons required per beam
+land_confidence_minimum,1.0,confidence class,Retain land signal confidence >= this value
+minimum_photons_after_prescreen,50.0,photons,Minimum photons after land-confidence screening
+minimum_photons_per_block_context,10.0,photons,Minimum context photons for block processing
+block_snr_threshold,0.1,dimensionless,Block SNR threshold
+stage1_window_length,100.0,m,Stage 1 along-track window length
+stage1_window_width,20.0,m,Stage 1 perpendicular window width
+stage2_window_length,20.0,m,Stage 2 along-track window length
+stage2_window_width,10.0,m,Stage 2 perpendicular window width
+stage3_window_length,10.0,m,Stage 3 slope-constrained window length
+stage3_window_width,2.0,m,Stage 3 slope-constrained window width
+stage3_spline_spar,0.5,dimensionless,Stage 3 spline spar
+stage4_spline_spar,0.5,dimensionless,Stage 4 spline spar
+stage5_along_slope_window,20.0,m,Stage 5 along-slope window
+stage5_mode_interval_fraction,0.1,fraction,Half-width of local perpendicular-range modal interval
+stage6_gam_minimum_points,30.0,points,Minimum observations required to trigger GAM
+stage6_gam_n_splines,40.0,splines,Number of GAM spline basis functions
+stage6_gam_spline_order,3.0,order,GAM spline order
+maximum_pair_distance,2.0,m,Maximum geodesic horizontal distance for candidate pairs
+core_block_width,0.01,degree latitude,Non-overlapping output block width
+context_overlap,0.001,degree latitude,Context overlap on either side of a core block

@@ -1,0 +1,28 @@
+{
+  "grid": "Grid_003",
+  "beam_1": "gt3r",
+  "beam_2": "gt1r",
+  "closest_approach_distance_m": 0.12441347276850133,
+  "beam_1_closest_photon": {
+    "longitude": 84.49225853719189,
+    "latitude": 30.15361244464759
+  },
+  "beam_2_closest_photon": {
+    "longitude": 84.49225816035388,
+    "latitude": 30.15361137426852
+  },
+  "crossing_center": {
+    "longitude": 84.49225834877288,
+    "latitude": 30.153611909458057
+  },
+  "core_block_edges_latitude_deg": [
+    30.139999999999997,
+    30.15,
+    30.159999999999997,
+    30.169999999999998
+  ],
+  "core_block_width_deg": 0.01,
+  "neighbor_blocks_each_side": 1,
+  "processing_context_overlap_deg": 0.001,
+  "coordinate_reference_note": "Coordinates are geographic longitude/latitude in degrees; elevation outputs follow the processing code's EGM2008 conversion."
+}

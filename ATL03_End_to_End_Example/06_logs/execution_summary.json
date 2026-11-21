@@ -1,0 +1,28 @@
+{
+  "grid": "Grid_003",
+  "file_1": "ATL03_20181118201153_07820106_006_02_subsetted.h5",
+  "beam_1": "gt3r",
+  "file_2": "ATL03_20221124100820_09881702_006_02_subsetted.h5",
+  "beam_2": "gt1r",
+  "raw_local_photons": [
+    16924,
+    26567
+  ],
+  "prescreened_photons": [
+    16272,
+    14628
+  ],
+  "recovered_SE_photons": [
+    9930,
+    7937
+  ],
+  "recovery_fractions": [
+    0.6456017164033548,
+    0.5736484533102053
+  ],
+  "candidate_pairs": 318,
+  "accepted_pairs": 37,
+  "pairing_one_to_one_pass": true,
+  "output_directory": "/home/yyr/herui/Code/ATL03_End_to_End_Example",
+  "completed_utc": "2026-11-21T06:29:30Z"
+}

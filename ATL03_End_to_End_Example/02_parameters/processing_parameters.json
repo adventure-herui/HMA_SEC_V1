@@ -1,0 +1,107 @@
+{
+  "minimum_raw_photons_per_beam": {
+    "value": 50,
+    "unit": "photons",
+    "description": "Minimum local raw photons required per beam"
+  },
+  "land_confidence_minimum": {
+    "value": 1,
+    "unit": "confidence class",
+    "description": "Retain land signal confidence >= this value"
+  },
+  "minimum_photons_after_prescreen": {
+    "value": 50,
+    "unit": "photons",
+    "description": "Minimum photons after land-confidence screening"
+  },
+  "minimum_photons_per_block_context": {
+    "value": 10,
+    "unit": "photons",
+    "description": "Minimum context photons for block processing"
+  },
+  "block_snr_threshold": {
+    "value": 0.1,
+    "unit": "dimensionless",
+    "description": "Block SNR threshold"
+  },
+  "stage1_window_length": {
+    "value": 100.0,
+    "unit": "m",
+    "description": "Stage 1 along-track window length"
+  },
+  "stage1_window_width": {
+    "value": 20.0,
+    "unit": "m",
+    "description": "Stage 1 perpendicular window width"
+  },
+  "stage2_window_length": {
+    "value": 20.0,
+    "unit": "m",
+    "description": "Stage 2 along-track window length"
+  },
+  "stage2_window_width": {
+    "value": 10.0,
+    "unit": "m",
+    "description": "Stage 2 perpendicular window width"
+  },
+  "stage3_window_length": {
+    "value": 10.0,
+    "unit": "m",
+    "description": "Stage 3 slope-constrained window length"
+  },
+  "stage3_window_width": {
+    "value": 2.0,
+    "unit": "m",
+    "description": "Stage 3 slope-constrained window width"
+  },
+  "stage3_spline_spar": {
+    "value": 0.5,
+    "unit": "dimensionless",
+    "description": "Stage 3 spline spar"
+  },
+  "stage4_spline_spar": {
+    "value": 0.5,
+    "unit": "dimensionless",
+    "description": "Stage 4 spline spar"
+  },
+  "stage5_along_slope_window": {
+    "value": 20.0,
+    "unit": "m",
+    "description": "Stage 5 along-slope window"
+  },
+  "stage5_mode_interval_fraction": {
+    "value": 0.1,
+    "unit": "fraction",
+    "description": "Half-width of local perpendicular-range modal interval"
+  },
+  "stage6_gam_minimum_points": {
+    "value": 30,
+    "unit": "points",
+    "description": "Minimum observations required to trigger GAM"
+  },
+  "stage6_gam_n_splines": {
+    "value": 40,
+    "unit": "splines",
+    "description": "Number of GAM spline basis functions"
+  },
+  "stage6_gam_spline_order": {
+    "value": 3,
+    "unit": "order",
+    "description": "GAM spline order"
+  },
+  "maximum_pair_distance": {
+    "value": 2.0,
+    "unit": "m",
+    "description": "Maximum geodesic horizontal distance for candidate pairs"
+  },
+  "core_block_width": {
+    "value": 0.01,
+    "unit": "degree latitude",
+    "description": "Non-overlapping output block width"
+  },
+  "context_overlap": {
+    "value": 0.001,
+    "unit": "degree latitude",
+    "description": "Context overlap on either side of a core block"
+  }
+}

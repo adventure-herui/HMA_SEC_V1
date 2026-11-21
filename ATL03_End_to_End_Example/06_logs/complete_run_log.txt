@@ -1,0 +1,218 @@
+[OUTPUT] Case package directory: /home/yyr/herui/Code/ATL03_End_to_End_Example
+
+==============================================================================================================
+STEP 1 | FIXED FILE PAIR AND AUTOMATIC CROSSING LOCALIZATION
+==============================================================================================================
+Grid                             : Grid_003
+ATL03 1                          : /home/yyr/herui/ICESat-2_ATL03/Grid_003/ATL03_20181118201153_07820106_006_02_subsetted.h5
+ATL03 2                          : /home/yyr/herui/ICESat-2_ATL03/Grid_003/ATL03_20221124100820_09881702_006_02_subsetted.h5
+Beam 1 / Beam 2                  : gt3r / gt1r
+Full-track coordinate counts     : 1,595,140, 4,622,465
+Estimated closest-approach distance : 0.124413 m
+Beam 1 closest photon (lon, lat)    : 84.492259, 30.153612
+Beam 2 closest photon (lon, lat)    : 84.492258, 30.153611
+Local crossing center (lon, lat)    : 84.492258, 30.153612
+Local processing block range        : 30.1400 to 30.1700 deg latitude
+[OUTPUT] Input manifest and parameter documentation saved.
+
+==============================================================================================================
+STEP 2 | LOAD LOCAL ATL03 WINDOWS AROUND THE CROSSING
+==============================================================================================================
+Local raw photons loaded, beam 1 / beam 2 : 16,924 / 26,567
+[PLOT] Matplotlib backend: qtagg
+[PLOT] If the figure window appears, close it to continue to denoising.
+
+==============================================================================================================
+FIGURE 1 | FIXED-FILE SPATIAL CONTEXT
+==============================================================================================================
+[FIGURE 1] Preparing map layers (fast vectorized mode)...
+[FIGURE 1] Drawing TP and selected Grid...
+[FIGURE 1] Filtering track photons to Grid extent...
+[FIGURE 1] ATL03_20181118201153_07820106_006_02_subsetted.h5 | gt3r: 1,595,140 photons in Grid extent; plotting 120,000.
+[FIGURE 1] ATL03_20221124100820_09881702_006_02_subsetted.h5 | gt1r: 4,622,465 photons in Grid extent; plotting 120,000.
+[FIGURE 1] Drawing Grid outline and local block guides...
+[FIGURE 1] Layout complete in 0.3 s. Opening figure window...
+[OUTPUT] Saved Figure1_spatial_context.png and Figure1_spatial_context.pdf
+[FIGURE 1] Figure window closed; continuing to denoising.
+
+==============================================================================================================
+FIXED PROCESSING SETTINGS AND MATCHING LEVEL
+==============================================================================================================
+PRE-SCREENING
+  Minimum raw photons per beam       : 50
+  Land signal confidence             : >= 1
+  Minimum photons after pre-screen   : 50
+  Minimum photons per processing context : 10
+  Block SNR threshold                : 0.1
+  SNR definition                     : calculated after land_conf >= 1 pre-screening
+                                      N(signal_conf=2..4) / N(signal_conf<=1 or signal_conf=-1)
+  SNR zero-denominator handling       : NaN; as in public code, NaN does not trigger SNR rejection
+  Pre-screen operation               : retain photons with land_conf >= 1; preserve original ATL03 row index
+
+DENOISING
+  Stage 1 rectangular window         : 100 x 20 m
+  Stage 2 rectangular window         : 20 x 10 m
+  Stage 3 slope-constrained window   : 10 x 2 m
+  Stage 3 spline spar                : 0.5
+  Stage 4 spline spar                : 0.5
+  Stage 3/4 spline implementation    : scipy.interpolate.UnivariateSpline, cubic (k=3)
+  Stage 3/4 smoothing parameter      : s=max(n*spar, 100, 0.2*n), n=unique latitude positions
+  Stage 5 along-slope window         : 20 m
+  Stage 5 modal interval             : +/- 0.10 of local perpendicular range
+  Stage 6 GAM                        : 40 splines, order 3, used when n >= 30
+  Block edge handling                : +/-0.001 degree overlap used as context; output emitted only by non-overlapping core block
+
+CROSSOVER PAIRING
+  Maximum photon-pair distance       : 2.0 m
+  Candidate search domain            : all reconstructed SE photons emitted by the three selected non-overlapping core blocks in each fixed beam
+  Candidate distance                 : geodesic horizontal distance (haversine), threshold <= 2.0 m
+  One-to-one enforcement level       : entire fixed file-pair comparison (all three core blocks pooled per beam)
+  Matching rule                      : sort all <=2 m candidates by ascending distance; greedily accept only if neither endpoint photon has been used
+  Uniqueness scope                   : each SE photon used at most once within this one file-pair comparison
+  Across other acquisition pairs     : no cross-comparison/global uniqueness constraint
+  Pair elevation difference          : later-acquisition EGM2008 elevation minus earlier-acquisition EGM2008 elevation
+  Outputs                            : candidate count, accepted count, duplicate-use checks, distance and elevation-difference summaries
+
+==============================================================================================================
+STEP 3 | DENOISING THE TWO FIXED FILES (THREE CORE BLOCKS ONLY)
+==============================================================================================================
+Source ATL03 file                 : ATL03_20181118201153_07820106_006_02_subsetted.h5
+Target beam                       : gt3r
+Raw photons in selected local read window : 16,924
+Local photons with land_conf >= 1 : 16,272
+Local photons removed by pre-screening       : 652
+Source ATL03 file                 : ATL03_20181118201153_07820106_006_02_subsetted.h5
+Target beam                       : gt3r
+Raw photons in selected local read window : 16,924
+Local photons with land_conf >= 1 : 16,272
+Local photons removed by pre-screening       : 652
+Local raw latitude span            : 0.031992 deg
+Full-track latitude span            : not loaded for denoising
+Processing core blocks              : 3
+Block range                         : 30.1400 to 30.1700 deg
+Neighbor blocks each side           : 1
+Loading EGM2008 grid               : /home/yyr/herui/us_nga_egm2008_1.tif
+Accepted local blocks               : 3/3
+SE photons emitted by core blocks    : 9,930
+Duplicate native ATL03 photon IDs after core ownership (gt3r) : 0
+Unique native ATL03 photons          : 9,930
+Pre-screened photons in selected cores: 15,381
+Local SE recovery fraction            : 0.646
+
+--------------------------------------------------------------------------------------------------------------
+LOCAL DENOISING LOG | ATL03_20181118201153_07820106_006_02_subsetted.h5 | gt3r
+--------------------------------------------------------------------------------------------------------------
+ block_start  block_end  n_block_context  n_block_core  SNR       P1  n_stage1      P2  n_stage2  spline1_spar      P3  n_stage3  spline2_spar  n_stage5_context  n_output_core status
+     30.1400    30.1500             6051          4990  NaN 150.3675      6041 53.2775      6029        0.5000 21.2875      3934        0.5000              2245           1722     ok
+     30.1500    30.1600             5990          4996  NaN 236.8925      5973 38.7150      5971        0.5000  3.8475      5895        0.5000              4317           3492     ok
+     30.1600    30.1700             6253          5395  NaN 234.4150      6236  7.7625      6235        0.5000  3.5000      6165        0.5000              5422           4716     ok
+Source ATL03 file                 : ATL03_20221124100820_09881702_006_02_subsetted.h5
+Target beam                       : gt1r
+Raw photons in selected local read window : 26,567
+Local photons with land_conf >= 1 : 14,628
+Local photons removed by pre-screening       : 11,939
+Source ATL03 file                 : ATL03_20221124100820_09881702_006_02_subsetted.h5
+Target beam                       : gt1r
+Raw photons in selected local read window : 26,567
+Local photons with land_conf >= 1 : 14,628
+Local photons removed by pre-screening       : 11,939
+Local raw latitude span            : 0.031998 deg
+Full-track latitude span            : not loaded for denoising
+Processing core blocks              : 3
+Block range                         : 30.1400 to 30.1700 deg
+Neighbor blocks each side           : 1
+Accepted local blocks               : 3/3
+SE photons emitted by core blocks    : 7,937
+Duplicate native ATL03 photon IDs after core ownership (gt1r) : 0
+Unique native ATL03 photons          : 7,937
+Pre-screened photons in selected cores: 13,836
+Local SE recovery fraction            : 0.574
+
+--------------------------------------------------------------------------------------------------------------
+LOCAL DENOISING LOG | ATL03_20221124100820_09881702_006_02_subsetted.h5 | gt1r
+--------------------------------------------------------------------------------------------------------------
+ block_start  block_end  n_block_context  n_block_core      SNR       P1  n_stage1     P2  n_stage2  spline1_spar     P3  n_stage3  spline2_spar  n_stage5_context  n_output_core status
+     30.1400    30.1500             5372          4414 243.1818 117.3800      5370 7.6250      5344        0.5000 3.5000      5228        0.5000              3031           2514     ok
+     30.1500    30.1600             5467          4586 320.5882 162.6425      5463 7.0150      5434        0.5000 3.5000      5325        0.5000              3008           2508     ok
+     30.1600    30.1700             5688          4836 405.2857  20.1875      5687 9.6525      5641        0.5000 4.5000      5504        0.5000              3384           2915     ok
+Recovered SE photon counts, beam 1 / beam 2 : 9,930 / 7,937
+Local SE recovery fraction, beam 1 / beam 2 : 0.646 / 0.574
+
+==============================================================================================================
+FIGURE 2 | RAW PHOTONS AND FINAL RECONSTRUCTED SURFACE NODES
+==============================================================================================================
+[OUTPUT] Saved Figure2_photon_reconstruction.png and Figure2_photon_reconstruction.pdf
+
+==============================================================================================================
+STEP 4 | ONE-TO-ONE MATCHING OF THE FIXED-FILE LOCAL SE PHOTONS
+==============================================================================================================
+Candidate photon pairs <= 2.0 m in selected local blocks : 318
+Accepted one-to-one pairs                                            : 37
+Repeated Beam-1 SE row positions                  : 0
+Repeated Beam-2 SE row positions                  : 0
+Repeated Beam-1 native ATL03 row indices          : 0
+Repeated Beam-2 native ATL03 row indices          : 0
+Accepted distance summary (m)      : min=0.208, median=1.188, max=1.927
+Accepted elevation-difference summary (m) : min=+2.509, median=+2.794, max=+3.222
+
+==============================================================================================================
+FIGURE 3 | ACCEPTED ONE-TO-ONE PHOTON PAIRS NEAR THE CROSSING
+==============================================================================================================
+[OUTPUT] Saved Figure3_one_to_one_pairing.png and Figure3_one_to_one_pairing.pdf
+
+==============================================================================================================
+FIGURE 4 | STATISTICS OF ACCEPTED PAIR DISTANCE AND ELEVATION DIFFERENCE
+==============================================================================================================
+[OUTPUT] Saved Figure4_pair_statistics.png and Figure4_pair_statistics.pdf
+
+==============================================================================================================
+FINAL SUMMARY
+==============================================================================================================
+Recovered SE photon counts, beam 1 / beam 2 : 9,930 / 7,937
+Local pre-screened photon counts, beam 1 / beam 2 : 16,272 / 14,628
+Local recovery fractions, beam 1 / beam 2   : 0.6456 / 0.5736
+Accepted one-to-one pairs                    : 37
+Candidate pairs within 2.0 m         : 318
+Pair-level distance and elevation-difference statistics:
+  Horizontal distance (m): mean=+1.114516, SD=0.547027, median=+1.188357, min=+0.208056, max=+1.927165
+  Elevation difference (m; later-earlier): mean=+2.801830, SD=0.163967, median=+2.793746, min=+2.509347, max=+3.221676
+Accepted pair records (pair ID, raw indices, distance, dh):
+ pair_id  photon1_raw_index  photon2_raw_index  distance  elevation_diff
+       1             337510            4084606  0.208056        2.761894
+       2             337515            4084598  0.269238        2.773171
+       3             337503            4084621  0.327589        2.734926
+       4             337505            4084618  0.331224        2.734880
+       5             337496            4084630  0.445923        2.721840
+       6             337495            4084629  0.447152        2.721973
+       7             337525            4084587  0.499565        2.793660
+       8             337526            4084585  0.499700        2.793746
+       9             337509            4084611  0.505444        2.910915
+      10             337491            4084639  0.589081        2.709038
+      11             337528            4084580  0.641645        2.803352
+      12             337490            4084647  0.791767        2.850033
+      13             337489            4084648  0.794254        2.850245
+      14             337483            4084654  0.861543        2.680734
+      15             337500            4084620  0.980130        2.577867
+      16             337497            4084619  0.982645        2.577315
+      17             337482            4084660  1.005766        2.666431
+      18             337536            4084564  1.035801        2.824197
+      19             337540            4084560  1.188357        2.829749
+      20             337539            4084559  1.190689        2.830288
+      21             337530            4084573  1.230256        2.651900
+      22             337478            4084676  1.304743        2.642488
+      23             337541            4084554  1.344780        2.832663
+      24             337474            4084685  1.447616        2.626943
+      25             337544            4084547  1.483947        2.834869
+      26             337479            4084666  1.518341        2.509347
+      27             337477            4084693  1.589314        2.754713
+      28             337545            4084546  1.612213        2.838817
+      29             337542            4084567  1.694255        3.163646
+      30             337543            4084563  1.698295        3.163709
+      31             337548            4084545  1.753964        3.006269
+      32             337546            4084543  1.756582        3.006487
+      33             337547            4084536  1.761238        2.837177
+      34             337549            4084544  1.764074        3.006387
+      35             337551            4084530  1.867913        2.838938
+      36             337468            4084701  1.886840        2.585413
+      37             337514            4084622  1.927165        3.221676
+[OUTPUT] Complete reproducibility package: /home/yyr/herui/Code/ATL03_End_to_End_Example

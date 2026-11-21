@@ -1,0 +1,3 @@
+grid,file,beam,acquisition_date,local_path_on_runner,source_product
+Grid_003,ATL03_20181118201153_07820106_006_02_subsetted.h5,gt3r,2018-11-18,/home/yyr/herui/ICESat-2_ATL03/Grid_003/ATL03_20181118201153_07820106_006_02_subsetted.h5,ICESat-2 ATL03
+Grid_003,ATL03_20221124100820_09881702_006_02_subsetted.h5,gt1r,2022-11-24,/home/yyr/herui/ICESat-2_ATL03/Grid_003/ATL03_20221124100820_09881702_006_02_subsetted.h5,ICESat-2 ATL03

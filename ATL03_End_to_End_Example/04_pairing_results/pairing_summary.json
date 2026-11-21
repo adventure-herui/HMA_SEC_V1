@@ -1,0 +1,10 @@
+{
+  "candidate_pairs": 318,
+  "accepted_pairs": 37,
+  "rejected_candidates": 281,
+  "maximum_pair_distance_m": 2.0,
+  "repeated_beam1_native_indices": 0,
+  "repeated_beam2_native_indices": 0,
+  "one_to_one_validation": true,
+  "enforcement_level": "entire fixed ATL03 file-pair comparison"
+}
